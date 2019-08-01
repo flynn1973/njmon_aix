@@ -8,6 +8,7 @@ There is a version of njmon for AIX and another njmon for Linux.
 - Roughly: 600 stats for AIX, an additional 55 for the Virtual I/O Server and a further 35, if running a VIOS Shared Storage Pool.
 
 (C) Copyright 2018 Nigel Griffiths
+
 [NJMON Site](http://nmon.sourceforge.net/pmwiki.php?n=Site.Njmon)
 
 ![](njmon.png)
