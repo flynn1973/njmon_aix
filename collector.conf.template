@@ -1,0 +1,6 @@
+port=8181
+directory=/grafana
+secret=deadbeef
+inject=1
+injector=/usr/local/bin/njmon_influxDB_injector_30.py
+json=0
