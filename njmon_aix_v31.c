@@ -2372,7 +2372,9 @@ void	ps_tape(double elapsed)
 		psubend();
 	}
 	psectionend();
-	memcpy(&tape_prev, &tape_now, sizeof(perfstat_tape_t) * tapes );
+	// memcpy(&tape_prev, &tape_now, sizeof(perfstat_tape_t) * tapes );
+         /* ctremel: avoid segfaults with tape devices caused by pointer overlaps */ 
+           memcpy(tape_prev, tape_now, sizeof(perfstat_tape_t) * tapes );
 }
 
 
