@@ -3709,6 +3709,8 @@ int	main(int argc, char **argv)
 
         signal(SIGUSR1, interrupt);
         signal(SIGUSR2, interrupt);
+        /* ignore SIGPIPE, yield EPIPE instead */
+        sigaction(SIGPIPE, &(struct sigaction){SIG_IGN}, NULL);
 
 	while (-1 != (ch = getopt(argc, argv, "c:s:?hdDfm:SMOPrkLVvuUi:p:xX:t:"))) {
 		switch (ch) {
