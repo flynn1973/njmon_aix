@@ -127,7 +127,6 @@ void child(int fd, int hit, FILE *pop, int save_json)
 	char * fstr;
 	static char buffer[BUFSIZE+1]; /* static so zero filled */
 	static char printbuffer[BUFSIZE+1]; 
-
 	char preamble[256];
 	char name[256];
 	char hostname[256];
