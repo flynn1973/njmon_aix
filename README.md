@@ -9,6 +9,8 @@ There is a version of njmon for AIX and another njmon for Linux.
 
 (C) Copyright 2018 Nigel Griffiths
 
-[NJMON Site](http://nmon.sourceforge.net/pmwiki.php?n=Site.Njmon)
+This repo is just for my personal coding duties. 
+
+[Official NJMON Site](http://nmon.sourceforge.net/pmwiki.php?n=Site.Njmon)
 
 ![](njmon.png)
