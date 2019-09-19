@@ -1,5 +1,8 @@
 # njmon
 
+The Code in this Repo is not in sync with the original njmon, and is not affilited with the original Author.
+The NG (New Generation) Directory contains some Improvements/Changes which reflects my personal needs.
+
 njmon is like nmon but collects a lot more performance and configuration data and outputs in JSON format 
 ready for immediate uploading to a performance stats database for near real-time graphing by online graphing tools. 
 There is a version of njmon for AIX and another njmon for Linux. 
@@ -9,7 +12,6 @@ There is a version of njmon for AIX and another njmon for Linux.
 
 (C) Copyright 2018 Nigel Griffiths
 
-This repo is just for my personal coding duties. 
 
 [Official NJMON Site](http://nmon.sourceforge.net/pmwiki.php?n=Site.Njmon)
 
