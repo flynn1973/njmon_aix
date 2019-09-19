@@ -198,11 +198,13 @@ void unmix(char *s)
     }
 }
 
-void create_socket(char *ip_address, long port, char *hostname, char *utc, char *secretstr)
+int create_socket(char *ip_address, long port, char *hostname, char *utc, char *secretstr)
 {
 int i;
-char buffer[8196];
+//char buffer[8196];
+char * buffer = calloc(8196, sizeof(*buffer));
 static struct sockaddr_in serv_addr;
+int rc;
 
 	DEBUG printf("socket: trying to connect to %s:%d\n",ip_address,port);
 	if((sockfd = socket(AF_INET, SOCK_STREAM,0)) <0) 
@@ -212,17 +214,36 @@ static struct sockaddr_in serv_addr;
 	serv_addr.sin_addr.s_addr = inet_addr(ip_address);
 	serv_addr.sin_port = htons(port);
 
+        /* allow reuse of local resources */ 
+        int reuse = 1;
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+        perror("setsockopt(SO_REUSEADDR) failed");
+        #ifdef SO_REUSEPORT
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
+        perror("setsockopt(SO_REUSEPORT) failed");
+        #endif
+
+
 	/* Connect tot he socket offered by the web server */
 	if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) <0) 
-		pexit("njmon: connect() call failed");
+		//pexit("njmon: connect() call failed");
+                perror("create_socket: connect() call failed");
 
 	/* Now the sockfd can be used to communicate to the server the GET request */
 	sprintf(buffer,"preamble-here njmon %s %s %s %s postamble-here", 
 			hostname, utc, secretstr, COLLECTOR_VERSION);
 	DEBUG printf("hello string=\"%s\"\n",buffer);
 	mixup(buffer);
-	if(write(sockfd, buffer, strlen(buffer)) <0 )
-		pexit("njmon: write() to socket failed");
+	//if(write(sockfd, buffer, strlen(buffer)) <0 )
+        //pexit("njmon: write() to socket failed");
+
+        rc = write(sockfd, buffer, strlen(buffer));
+                if (rc < 0 && errno == EPIPE)
+                {
+                    perror("create_socket: EPIPE detected, write to socket failed, server down?");
+                    close(sockfd);
+                }
+                    return rc;
 }
 #endif /* NOREMOTE */
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -470,22 +491,35 @@ void pstats()
 	psectionend("njmon_stats");
 }
 
-void push()
+int push()
 {
+int rc;
 	buffer_check();
 	DEBUG {
 		printf("DEBUG size=%ld\n",output_char);
 		printf("%s",output);
 	}
-	if( write(sockfd,output,output_char) < 0) {
-		/* if stdout failed there is not must we can do so stop */
-		perror("njmon write to stdout failed, stopping now.");
-		exit(99);
-	}
+	//if( write(sockfd,output,output_char) < 0) {
+	//	/* if stdout failed there is not must we can do so stop */
+	//	perror("njmon write to stdout failed, stopping now.");
+	//	exit(99);
+	//}
+    
+       rc = write(sockfd,output,output_char);
+
+          if (rc < 0 && errno == EPIPE)
+                {
+                    perror("push: EPIPE detected, push to socket failed, server down?");
+                    close(sockfd);
+                }
+ 
+        
+
 	fflush(NULL);  /* force I/O output now */
 	DEBUG printf("Flushed output buffer, size=%ld\n",output_char);
 	output[0] = 0;
 	output_char = 0;
+        return rc;
 }
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -717,7 +751,8 @@ void get_utc()
 
 void    date_time(long seconds, long loop, long maxloops)
 {
-        char   buffer[256];
+        //char   buffer[256];
+          char * buffer = calloc(256, sizeof(*buffer));
 
         /* This is ISO 8601 datatime string format - ughly but get over it! :-) */
         get_time();
@@ -803,7 +838,8 @@ int records = 0;
 int ret;
 int count;
 char b[1024];
-char buffer[2048];
+//char buffer[2048];
+char * buffer = calloc(8196, sizeof(*buffer));
 
         if(gpfs_na)
                 return -1;
@@ -959,7 +995,8 @@ void gpfs_init()
 
 void gpfs_data(double elapsed)
 {
-        char buffer[10000];
+        //char buffer[10000];
+        char * buffer = calloc(10000, sizeof(*buffer));
         int records;
         int i;
         int ret;
@@ -2372,7 +2409,9 @@ void	ps_tape(double elapsed)
 		psubend();
 	}
 	psectionend();
-	memcpy(&tape_prev, &tape_now, sizeof(perfstat_tape_t) * tapes );
+	// memcpy(&tape_prev, &tape_now, sizeof(perfstat_tape_t) * tapes );
+         /* ctremel: avoid segfaults with tape devices caused by pointer overlaps */ 
+           memcpy(tape_prev, tape_now, sizeof(perfstat_tape_t) * tapes );
 }
 
 
@@ -3572,7 +3611,8 @@ void make_pid_file()
 {
 int fd;
 int ret;
-char buffer[32];
+//char buffer[32];
+char * buffer = calloc(32, sizeof(*buffer));
 
     	FUNCTION_START;
     if((fd = creat(pid_filename, O_CREAT | O_WRONLY)) < 0) {
@@ -3590,7 +3630,8 @@ char buffer[32];
 
 void check_pid_file()
 {
-char buffer[32];
+//char buffer[32];
+char * buffer = calloc(32, sizeof(*buffer));
 int fd;
 pid_t pid;
 int ret;
@@ -3640,7 +3681,8 @@ int	main(int argc, char **argv)
 	char	directory[4096+1];
 	int	file_output = 0;
 	char	filename[64];
-	char	buffer[8192];
+	//char	buffer[8192];
+        char * buffer = calloc(8196, sizeof(*buffer));
 	char	host[1024 +1] = { 0	};
 	char   *s;
 	int	hostmode = 0;
@@ -3663,6 +3705,7 @@ int	main(int argc, char **argv)
 	FILE   *fp;
 	int	print_child_pid = 0;
 	int	child_pid = 0;
+        int     rc; 
         
 	debug = atoi(getenv("NJMON_DEBUG"));
     	FUNCTION_START;
@@ -3673,6 +3716,8 @@ int	main(int argc, char **argv)
 
         signal(SIGUSR1, interrupt);
         signal(SIGUSR2, interrupt);
+        /* ignore SIGPIPE, yield EPIPE instead */
+        sigaction(SIGPIPE, &(struct sigaction){SIG_IGN}, NULL);
 
 	while (-1 != (ch = getopt(argc, argv, "c:s:?hdDfm:SMOPrkLVvuUi:p:xX:t:"))) {
 		switch (ch) {
@@ -3811,7 +3856,11 @@ int	main(int argc, char **argv)
 		    tim->tm_hour,
 		    tim->tm_min,
 		    tim->tm_sec);
-		create_socket(host, port, hostname, buffer, secret);
+		rc = create_socket(host, port, hostname, buffer, secret);
+                if (rc < 0) {
+                    printf("create_socket: rc of initial connect is %d,giving up.\n",rc);
+                    exit(99);
+                }
 	}
 #endif /* NOREMOTE */
 	if(directory_set) {
@@ -4062,7 +4111,11 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
 
 		DEBUG praw("Sample");
 		psampleend(loop == (maxloops -1));
-		push();
+		rc = push();
+                if (rc < 0) {
+                printf("push1: rc is %d,trying reconnect.\n",rc);
+                create_socket(host, port, hostname, buffer, secret);
+                }
 		/* debugging = uncomment to crash here!
 		ASSERT(loop == 42, "CRASHer", DUMP, loop); 
 		*/
@@ -4083,7 +4136,11 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
 		if(njmon_stats)pstats();
 		pfinish("");
 	}
-	push();
+	rc = push();
+        if (rc < 0) {
+        printf("push2: rc is %d,trying reconnect.\n",rc);
+        create_socket(host, port, hostname, buffer, secret);
+        }
 	return 0;
 }
 /* - - - The End - - - */
