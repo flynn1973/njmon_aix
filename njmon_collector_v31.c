@@ -127,7 +127,6 @@ void child(int fd, int hit, FILE *pop, int save_json)
 	char * fstr;
 	static char buffer[BUFSIZE+1]; /* static so zero filled */
 	static char printbuffer[BUFSIZE+1]; 
-
 	char preamble[256];
 	char name[256];
 	char hostname[256];
@@ -417,6 +416,17 @@ int main(int argc, char **argv)
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	serv_addr.sin_port = htons(port);
+
+        /* ctremel: allow reuse of local addr/port descriptors */
+        int reuse = 1;
+        if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
+        logger(ERROR,"System call","setsockopt(SO_REUSEADDR) failed",errno);
+        #ifdef SO_REUSEPORT
+        if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
+        logger(ERROR,"System call","setsockopt(SO_REUSEPORT) failed",errno);
+        #endif
+        /* ctremel end */
+
 	if(bind(listenfd, (struct sockaddr *)&serv_addr,sizeof(serv_addr)) <0)
 		logger(ERROR,"System call","bind",errno);
 	if( listen(listenfd,64) <0)
