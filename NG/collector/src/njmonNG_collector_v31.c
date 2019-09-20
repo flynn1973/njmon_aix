@@ -591,7 +591,7 @@ int main(int argc, char **argv)
                         //the main thread can now serve the next request
 			int err = pthread_create(&tid[i], NULL, socketThread, socketfd);
                         if(err) {
-				slog_error(0,"Failed to create thread %d",errno);
+				slog_error(0,"Failed to create thread %d",err);
 			        exit(3);
 			}
 
