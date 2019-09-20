@@ -120,7 +120,7 @@ void unmix(char *s)
 
 void * socketThread(void *arg)
 { 
-        int fd = *((int *)arg);	
+	int fd = *((int *)arg);
 	int j;
         FILE * json_file_fd = (FILE *)0; 
 	int bytes;
@@ -156,7 +156,6 @@ void * socketThread(void *arg)
 	preamble_datalen = ntohl(preamble_netlen);
 
 	DEBUG slog_debug(0,"client anounced %d bytes preamble messagelength",preamble_datalen);
-	 pthread_mutex_lock(&lock);
 	char * preamble_data = malloc(preamble_datalen+1);
         int preamble_total = 0; // return number actually sent here
         int preamble_bytesleft = preamble_datalen; // how many we have left to send
@@ -223,8 +222,6 @@ void * socketThread(void *arg)
 		slog_error(0,"Missing or wrong version in request, maybe not NG? %s",preamble_data);
 	        exit(3);
 	}
-	 free(preamble_data);
-	 pthread_mutex_unlock(&lock);
 	
           
                 uint32_t nm_datalen;
@@ -244,7 +241,6 @@ void * socketThread(void *arg)
 
 	       DEBUG slog_debug(0,"client %s anounced %d bytes njmon messagelength",hostname, nm_datalen);
 	        
-	        pthread_mutex_lock(&lock);
 	       char * nm_data = malloc(nm_datalen+1);
                int nm_total = 0; // return number actually sent here
                int nm_bytesleft = nm_datalen; // how many we have left to send
@@ -297,13 +293,12 @@ void * socketThread(void *arg)
 				}
 			}
 			fflush(pop);
-			//pclose(pop);
+			pclose(pop);
 
                     }
-		    free(nm_data);
-		    pthread_mutex_unlock(&lock);
-
-	
+       
+        free(preamble_data); 
+        free(nm_data);	
 	DEBUG slog_debug(0, "closing socket");
 	shutdown(fd,SHUT_WR);
 	close(fd);
@@ -585,11 +580,17 @@ int main(int argc, char **argv)
  
                         //Accept call creates a new socket for the incoming connection
                          addr_size = sizeof serverStorage;
-                         socketfd = accept(listenfd, (struct sockaddr *) &serverStorage, &addr_size);
+			 
+			 // allocate socketfd on the heap to avoid nasty race conditions
+			 int * socketfd;
+			 socketfd = malloc(sizeof(int));
+
+                         *socketfd = accept(listenfd, (struct sockaddr *) &serverStorage, &addr_size);
 
                         //create a thread for each client request and assign the client request to it for processing 
                         //the main thread can now serve the next request
-                        if( pthread_create(&tid[i], NULL, socketThread, &socketfd) != 0 ) {
+			int err = pthread_create(&tid[i], NULL, socketThread, socketfd);
+                        if(err) {
 				slog_error(0,"Failed to create thread %d",errno);
 			        exit(3);
 			}
