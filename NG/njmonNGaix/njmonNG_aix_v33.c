@@ -1,5 +1,5 @@
 /*
-    njmon.c -- collects AIX performance data and generates JSON format data.
+    njmonNG.c -- collects AIX performance data and generates JSON format data.
     Developer: Nigel Griffiths.
     (C) Copyright 2018 Nigel Griffiths
 
@@ -28,70 +28,32 @@
 */
 
 /* 
-Compiling xlc or gcc are fine
-   cc njmon_aix_vXX.c -o njmon_aix -lperfstat -O3 -D<options below>
-
-Explanation of ifdef and ifndef
-#ifdef AIX53 historic only - prints out the path_count and paths but only in AIX 53
-#ifdef SSP only - -u and -U includes Shared Storage Pool stats in VIOS 2.2=AIX6 TL9 but inclear about VIOS 3.1=AIX7.2 TL3
-#ifdef VIOS - -v vhost (virtual adapter) and virtual disk target
-#ifndef AIX6 - AIX has a two missing stats compared to AIX7 Also needed fir VIOS 2.2
+Compiling xlc or gcc are fine where XX is the version number in the c file
+   cc -g -O3 -o njmon njmon_aix_vXX.c -lperfstat -D<options below>
 
 for AIX 6 
 	-D AIX6
 for VIOS 2.2
 	-D AIX6 -D VIOS -D SSP
-for AIX 7
-	none required
 for VIOS 3.1
 	-D VIOS -D SSP
+
+Explanation of ifdef and ifndef
+#ifdef AIX53 historic only - prints out the path_count and paths but only in AIX 53
+#ifndef AIX6 - AIX has a two missing stats compared to AIX7 Also needed fir VIOS 2.2
+#ifdef VIOS - -v vhost (virtual adapter) and virtual disk target
+#ifdef SSP only -u and -U includes Shared Storage Pool stats in VIOS 2.2=AIX6 TL9 
+	and VIOS 3.1=AIX7.2 TL3+
 */
-/* Makefile - - - - - - - - - - - - - - - - - */
-#ifdef MAKEFILE
-CFLAGS=-g -O3 
-LDFLAGS=-lperfstat
-
-FILE=njmon_aix_v20.c
-
-OUT72=njmon_aix72_v20
-OUT722=njmon_aix722_v20
-OUT71=njmon_aix71_v20
-OUT61=njmon_aix61_v20
-OUTvios2=njmon_vios2_v20
-OUTvios3=njmon_vios3_v20
-
-aix72:
-	cc $(CFLAGS) -o $(OUT72) $(FILE) $(LDFLAGS) 
-
-aix722:
-	cc $(CFLAGS) -o $(OUT722) $(FILE) $(LDFLAGS) 
-
-aix71:
-	gcc $(CFLAGS) -o $(OUT71) $(FILE) $(LDFLAGS)
-
-aix61:
-	gcc $(CFLAGS) -o $(OUT61) $(FILE) $(LDFLAGS) -D AIX6
-
-vios2:
-	gcc $(CFLAGS) -o $(OUTvios2) $(FILE) $(LDFLAGS) -D AIX6 -D VIOS -D SSP
-
-vios3:
-	gcc $(CFLAGS) -o $(OUTvios3) $(FILE) $(LDFLAGS) -D VIOS -D SSP
-
-clean:
-	rm -f njmon_aix72_v11 njmon_aix71_v11 njmon_aix61_v11 njmon_vios2_v11 njmon_vios3_v11
-
-#endif
-/* - - - - - - - - - - - - - - - - - */
 
 /* Only used in comms to the njmon_collector */
-#define COLLECTOR_VERSION  "12"  
+#define PROTOCOL_VERSION  "12NG"  
 
 /*njmon version */
-#define VERSION  "31@17/07/2019"
+#define VERSION  "33@16/08/2019"
 
 char	version[] = VERSION;
-static char	*SccsId = "njmon for AIX " VERSION;
+static char	*SccsId = "njmonNG for AIX " VERSION;
 char	*command;
 
 /* Work around an AIX bug in oslevel -s */
@@ -131,6 +93,8 @@ int rpmstuck = 0;
 #define FUNCTION_START if(debug)fprintf(stderr,"%s called line %d\n",__func__, __LINE__);
 #define DEBUG if(debug)
 
+#define BUFSIZE 2048 * 2048 /* larger = more efficient */
+
 void   interrupt(int signum)
 {
         switch(signum) {
@@ -152,8 +116,6 @@ int danger = 0;
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-void pexit(char * msg) { perror(msg); exit(1); }
-
 int en[94] = {
  8, 85, 70, 53, 93, 72, 61,  1, 41, 36,
 49, 92, 44, 42, 25, 58, 81, 15, 57, 10,
@@ -165,6 +127,7 @@ int en[94] = {
 34,  5, 32, 21, 14, 38, 19, 29, 24, 33,
 47, 31, 80, 16, 83, 90, 67, 23, 20, 17,
 74, 62, 87, 63 };
+
 
 int de[94] = {
 67,  7, 34, 49, 45, 71, 38, 50,  0, 29,
@@ -182,9 +145,9 @@ void mixup(char *s)
 {
     int i;
     for (i = 0; s[i]; i++) {
-	if(s[i] <= ' ') continue;
-	if(s[i] >  '~') continue;
-	s[i] = en[s[i]-33]+33;
+        if(s[i] <= ' ') continue;
+        if(s[i] >  '~') continue;
+        s[i] = en[s[i]-33]+33;
     }
 }
 
@@ -192,59 +155,87 @@ void unmix(char *s)
 {
     int i;
     for (i = 0; s[i]; i++) {
-	if(s[i] <= ' ') continue;
-	if(s[i] >  '~') continue;
-	s[i] = de[s[i]-33]+33;
+        if(s[i] <= ' ') continue;
+        if(s[i] >  '~') continue;
+        s[i] = de[s[i]-33]+33;
     }
 }
+
+
+void pexit(char * msg) { perror(msg); exit(1); }
 
 int create_socket(char *ip_address, long port, char *hostname, char *utc, char *secretstr)
 {
 int i;
-//char buffer[8196];
-char * buffer = calloc(8196, sizeof(*buffer));
+char * buffer = calloc(BUFSIZE, sizeof(*buffer));
 static struct sockaddr_in serv_addr;
-int rc;
 
-	DEBUG printf("socket: trying to connect to %s:%d\n",ip_address,port);
-	if((sockfd = socket(AF_INET, SOCK_STREAM,0)) <0) 
-		pexit("njmon:socket() call failed");
 
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = inet_addr(ip_address);
-	serv_addr.sin_port = htons(port);
 
-        /* allow reuse of local resources */ 
+        DEBUG printf("socket: trying to connect to %s:%d\n",ip_address,port);
+        if((sockfd = socket(AF_INET, SOCK_STREAM,0)) <0)
+                pexit("njmon:socket() call failed");
+
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_addr.s_addr = inet_addr(ip_address);
+        serv_addr.sin_port = htons(port);
+
+        /* allow reuse of local resources */
         int reuse = 1;
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0)
-        perror("setsockopt(SO_REUSEADDR) failed");
+        pexit("setsockopt(SO_REUSEADDR) failed");
         #ifdef SO_REUSEPORT
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse, sizeof(reuse)) < 0)
-        perror("setsockopt(SO_REUSEPORT) failed");
+        pexit("setsockopt(SO_REUSEPORT) failed");
         #endif
 
 
-	/* Connect tot he socket offered by the web server */
-	if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) <0) 
-		//pexit("njmon: connect() call failed");
+        /* Connect to the socket offered by the web server */
+        if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) <0)
                 perror("create_socket: connect() call failed");
 
-	/* Now the sockfd can be used to communicate to the server the GET request */
-	sprintf(buffer,"preamble-here njmon %s %s %s %s postamble-here", 
-			hostname, utc, secretstr, COLLECTOR_VERSION);
-	DEBUG printf("hello string=\"%s\"\n",buffer);
-	mixup(buffer);
-	//if(write(sockfd, buffer, strlen(buffer)) <0 )
-        //pexit("njmon: write() to socket failed");
+        /* Now the sockfd can be used to communicate to the server the GET request */
 
-        rc = write(sockfd, buffer, strlen(buffer));
-                if (rc < 0 && errno == EPIPE)
-                {
-                    perror("create_socket: EPIPE detected, write to socket failed, server down?");
-                    close(sockfd);
-                }
-                    return rc;
+        sprintf(buffer,"preamble-here njmonNG %s %s %s %s postamble-here",
+                        hostname, utc, secretstr, PROTOCOL_VERSION);
+        DEBUG printf("hello string=\"%s\"\n",buffer);
+        mixup(buffer);  
+
+        int n;
+        uint32_t datalen = strlen(buffer);
+        uint32_t netlen = htonl(datalen); // arrange the bytes in network byte order
+        int total = 0;        // how many bytes we've sent
+        int bytesleft = netlen; // how many we have left to send
+        int headerlength = 0;
+
+         DEBUG printf("create_socket: netlen is %d\n",netlen);
+
+        // send message size
+         while(headerlength < 4) {
+         n = send(sockfd, &netlen+headerlength, 4-headerlength, 0); // send the datalength header (first 4 bytes)
+         if (n == -1) { break; }
+         headerlength += n;
+        }
+         DEBUG printf("create_socket: sent %d bytes of header\n",n);
+
+         // send data
+         while(total < datalen) {
+         n = send(sockfd, buffer+total, bytesleft, 0);
+         if (n == -1) { break; }
+         total += n;
+         bytesleft -= n;
+        }
+
+        DEBUG printf("create_socket: output buffer data send size is %d bytes\n",datalen);
+        DEBUG printf("create_socket: actually sent %d bytes of data\n",n);
+
+
+        return n==-1?-1:0; // return -1 on failure, 0 on success
+
 }
+
+
+
 #endif /* NOREMOTE */
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
@@ -491,35 +482,55 @@ void pstats()
 	psectionend("njmon_stats");
 }
 
-int push()
+int push_all(char *output)
 {
-int rc;
-	buffer_check();
-	DEBUG {
-		printf("DEBUG size=%ld\n",output_char);
-		printf("%s",output);
-	}
-	//if( write(sockfd,output,output_char) < 0) {
-	//	/* if stdout failed there is not must we can do so stop */
-	//	perror("njmon write to stdout failed, stopping now.");
-	//	exit(99);
-	//}
-    
-       rc = write(sockfd,output,output_char);
 
-          if (rc < 0 && errno == EPIPE)
-                {
-                    perror("push: EPIPE detected, push to socket failed, server down?");
-                    close(sockfd);
-                }
- 
-        
+    buffer_check();
+    DEBUG {
+                printf("DEBUG size=%ld\n",output_char);
+                printf("%s",output);
+        }
 
-	fflush(NULL);  /* force I/O output now */
-	DEBUG printf("Flushed output buffer, size=%ld\n",output_char);
-	output[0] = 0;
-	output_char = 0;
-        return rc;
+
+
+        int n;
+        uint32_t datalen = strlen(output);
+        uint32_t netlen = htonl(datalen); // arrange the bytes in network byte order
+        int total = 0;        // how many bytes we've sent
+        int bytesleft = netlen; // how many we have left to send
+        int headerlength = 0;
+
+        DEBUG printf("push_all: netlen is %d\n",netlen);
+
+         // send message size
+         while(headerlength < 4) {
+         n = send(sockfd, &netlen+headerlength, 4-headerlength, 0); // send the datalength header (first 4 bytes)
+         if (n == -1) { break; }
+         headerlength += n;
+        }
+         DEBUG printf("push_all: sent %d bytes of header\n",n);
+
+         // send data
+         while(total < datalen) {
+         n = send(sockfd, output+total, bytesleft, 0);
+         if (n == -1) { break; }
+         total += n;
+         bytesleft -= n;
+        }
+
+        DEBUG printf("push_all: output buffer data send size is %d bytes\n",datalen);
+        DEBUG printf("push_all: actually sent %d bytes of data\n",n);
+
+
+
+     fflush(NULL);  // spit out the buffer on stdout
+     DEBUG printf("Flushed output buffer, size=%ld\n",output_char);
+     output[0] = 0;
+     output_char = 0;
+     shutdown(sockfd,SHUT_RD);
+     close(sockfd);
+
+     return n==-1?-1:0; // return -1 on failure, 0 on success
 }
 
 /* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -536,9 +547,9 @@ void remove_nl(char *string)
 }
 
 
-#define RETURN 1
-#define EXIT 2
-#define DUMP 3
+#define RETURN 400
+#define EXIT 402
+#define DUMP 404
 
 void assert(const unsigned char *file, 
 	const unsigned char *function,
@@ -751,8 +762,7 @@ void get_utc()
 
 void    date_time(long seconds, long loop, long maxloops)
 {
-        //char   buffer[256];
-          char * buffer = calloc(256, sizeof(*buffer));
+        char   buffer[256];
 
         /* This is ISO 8601 datatime string format - ughly but get over it! :-) */
         get_time();
@@ -838,8 +848,7 @@ int records = 0;
 int ret;
 int count;
 char b[1024];
-//char buffer[2048];
-char * buffer = calloc(8196, sizeof(*buffer));
+char buffer[2048];
 
         if(gpfs_na)
                 return -1;
@@ -995,8 +1004,7 @@ void gpfs_init()
 
 void gpfs_data(double elapsed)
 {
-        //char buffer[10000];
-        char * buffer = calloc(10000, sizeof(*buffer));
+        char buffer[10000];
         int records;
         int i;
         int ret;
@@ -1131,8 +1139,20 @@ void	ps_part_config()
 }
 
 /* partition total */
-perfstat_partition_total_t part;
+perfstat_partition_total_t partprev;
+perfstat_partition_total_t partcurr;
 unsigned long long	hardware_ticks;
+
+void	ps_part_total_init()
+{
+	int	rc;
+	char	part_name[IDENTIFIER_LENGTH];
+
+    	FUNCTION_START;
+	part_name[0] = 0;
+	rc = perfstat_partition_total(NULL, &partcurr, sizeof(perfstat_partition_total_t), 1);
+	ASSERT(rc > 0, "perfstat_partition_total() init", RETURN, rc);
+}
 
 void	ps_part_total()
 {
@@ -1141,26 +1161,96 @@ void	ps_part_total()
 	char	part_name[IDENTIFIER_LENGTH];
 
     	FUNCTION_START;
+	/* save the previous values */
+	memcpy(&partprev, &partcurr, sizeof(perfstat_partition_total_t));
+
 	part_name[0] = 0;
-	rc = perfstat_partition_total(NULL, &part, sizeof(perfstat_partition_total_t), 1);
+	rc = perfstat_partition_total(NULL, &partcurr, sizeof(perfstat_partition_total_t), 1);
 	ASSERT(rc > 0, "perfstat_partition_total()", RETURN, rc);
 
-	hardware_ticks = part.timebase_last - timebase_saved;
-	timebase_saved = part.timebase_last;
+	hardware_ticks = partcurr.timebase_last - timebase_saved;
+	timebase_saved = partcurr.timebase_last;
+
+	psection("partition_type");
+	plong("smt_capable", partcurr.type.b.smt_capable);
+	plong("smt_enabled", partcurr.type.b.smt_enabled);
+	plong("lpar_capable", partcurr.type.b.lpar_capable);
+	plong("lpar_enabled", partcurr.type.b.lpar_enabled);
+	plong("shared_capable", partcurr.type.b.shared_capable);
+	plong("shared_enabled", partcurr.type.b.shared_enabled);
+	plong("dlpar_capable", partcurr.type.b.dlpar_capable);
+	plong("capped", partcurr.type.b.capped);
+	plong("kernel64bit", partcurr.type.b.kernel_is_64);
+	plong("pool_util_authority", partcurr.type.b.pool_util_authority);
+	plong("donate_capable", partcurr.type.b.donate_capable);
+	plong("donate_enabled", partcurr.type.b.donate_enabled);
+	plong("ams_capable", partcurr.type.b.ams_capable);
+	plong("ams_enabled", partcurr.type.b.ams_enabled);
+	plong("power_save", partcurr.type.b.power_save);
+	plong("shared_extended", partcurr.type.b.shared_extended);
+	psectionend();
+
 }
 
+void	ps_processor_pool()
+{
+static int spp_errors = 0;
+static int spp_in_error = 0;
+	int rc;
+	perfstat_rawdata_t rawdata;
+	perfstat_processor_pool_util_t pp_util;
+
+	rawdata.type = SHARED_POOL_UTIL;
+	rawdata.curstat = &partcurr; 
+	rawdata.prevstat= &partprev;
+	rawdata.sizeof_data = sizeof(perfstat_partition_total_t);
+	rawdata.cur_elems = 1;
+	rawdata.prev_elems = 1;
+	rc = perfstat_processor_pool_util(&rawdata, &pp_util, sizeof(perfstat_processor_pool_util_t),1);
+	if(spp_errors == 0) {
+		ASSERT(rc > 0, "perfstat_processor_pool_util() - check HMC: 'Enable Performance Information Collection' = Enabled for this LPAR", RETURN, rc);
+	}
+	if(rc > 0) {
+	    if(spp_in_error){
+		spp_in_error = 0;
+	    } else {
+		psection("processor_pool");
+		plong("pool_id", pp_util.ssp_id);
+		plong("max_capacity",      (long)(pp_util.max_capacity/100));     	/* physical units to cores */
+		plong("entitled_capacity", (long)(pp_util.entitled_capacity/100));	/* physical units to cores */
+		plong("phys_cpus_pool", pp_util.phys_cpus_pool);
+		pdouble("idle_cores",pp_util.idle_cores);
+		pdouble("max_cores",pp_util.max_cores );
+		pdouble("busy_cores", pp_util.busy_cores );
+		pdouble("scaled_busy_cores", pp_util.sbusy_cores );
+		pdouble("global_pool_tot_cores", pp_util.gpool_tot_cores );
+		pdouble("global_pool_busy_cores", pp_util.gpool_busy_cores );
+		psectionend();
+	    }
+	} else {
+		spp_errors++;
+		spp_in_error = 1;
+	}
+}
 
 void ps_one_disk_adapter(perfstat_diskadapter_t dstat, perfstat_diskadapter_t fstat, double elapsed)
 {
+char string[64];
     	FUNCTION_START;
 	psub(dstat.name);
 	pstring("description", dstat.description);
-	switch (dstat.adapter_type) {
-		SCSI:  pstring("adapter_type", "SCSI, SAS, other"); break;
-		VHOST: pstring("adapter_type", "Virtual SCSI/SAS Adapter"); break;
-		FC:    pstring("adapter_type", "Fiber Channel"); break;
-		default: pstring("adapter_type", "unknown"); break;
+
+	if(dstat.adapter_type == SCSI) 
+		pstring("adapter_type", "SCSI, SAS, other");
+	else if(dstat.adapter_type == VHOST) 
+		pstring("adapter_type", "Virtual SCSI/SAS Adapter");
+	else if(dstat.adapter_type == FC)
+		pstring("adapter_type", "Fibre Channel");
+	else {
+		sprintf(string, "unknown=%d", dstat.adapter_type);
+		pstring("adapter_type", string);
 	}
+
 	plong("devices", dstat.number);
 	plong("size_mb", dstat.size);
 	plong("free_mb", dstat.free);
@@ -1425,7 +1515,7 @@ void ps_vios_vfc_init()
 	vfc_name[0] = 0;
 	vios_vfc_adapters = perfstat_virtual_fcadapter(NULL, NULL, sizeof(perfstat_fcstat_t), 0);
 	DEBUG printf("perfstat_virtual_fcadapter: %d virtual FC adapter(s) found\n",vios_vfc_adapters); 
-	ASSERT(vios_vfc_adapters >= 0, "perfstat_virtual_fcadapter(init)", EXIT, vios_vfc_adapters);
+	ASSERT(vios_vfc_adapters >= 0, "perfstat_virtual_fcadapter(init)", RETURN, vios_vfc_adapters);
 
 	if(vios_vfc_adapters <= 0) {
 		vios_vfc_adapters = 0;
@@ -1477,6 +1567,7 @@ char first_SEA_found = 0;
 /* return the network adapter type string */
 char    *netadapter_type(netadap_type_t type)
 {
+static char string[64];
         switch (type) {
         case NET_PHY:  return "Physical";
         case NET_SEA:  return "SEA";
@@ -1490,7 +1581,8 @@ char    *netadapter_type(netadap_type_t type)
 
         case NET_VLAN: return "VLAN";
         default:
-                return "type-unknown";
+		sprintf(string, "unknown=%d", type);
+                return string;
         }
 }
 
@@ -1803,6 +1895,7 @@ void	ps_cpu_stats(double elapsed)
 {
 	int	rc;
 	int	i;
+	int	cpu_num;
 	long	total;
 	char	cpu_name[IDENTIFIER_LENGTH];
 	char cpuname[256];
@@ -1851,9 +1944,9 @@ printf("idle=%ld idle=%ld diff=%ld\n",(long)cpu_statp[i].idle,(long)cpu_statq[i]
 	psection("cpu_physical");
 #endif
 	for (i = 0; i < rc; i++) {
-/*
-                sprintf(cpuname,"pcpu%03d",i);
-*/
+		/* name looks like this "cpu3" but we want "cpu003" */
+                cpu_num = atoi(&cpu_statp[i].name[3]);
+                sprintf(cpuname,"cpu%03d",cpu_num);
                 psub(cpu_statp[i].name);
 		plong("user", (long)((cpu_statp[i].puser - cpu_statq[i].puser) * 100.0 / (double)hardware_ticks));
 		plong("sys",  (long)((cpu_statp[i].psys  - cpu_statq[i].psys ) * 100.0 / (double)hardware_ticks));
@@ -1864,9 +1957,9 @@ printf("idle=%ld idle=%ld diff=%ld\n",(long)cpu_statp[i].idle,(long)cpu_statq[i]
 	psectionend();
 	psection("cpu_syscalls");
 	for (i = 0; i < rc; i++) {
-/*
-                sprintf(cpuname,"cpu%03d",i);
-*/
+		/* name looks like this "cpu3" but we want "cpu003"  so they list alphabetically */
+                cpu_num = atoi(&cpu_statp[i].name[3]);
+                sprintf(cpuname,"cpu%03d",cpu_num);
                 psub(cpu_statp[i].name);
 		pdouble("syscall",    (double)(cpu_statp[i].syscall  - cpu_statq[i].syscall)/elapsed);
 		pdouble("sysread",    (double)(cpu_statp[i].sysread  - cpu_statq[i].sysread)/elapsed);
@@ -2409,9 +2502,7 @@ void	ps_tape(double elapsed)
 		psubend();
 	}
 	psectionend();
-	// memcpy(&tape_prev, &tape_now, sizeof(perfstat_tape_t) * tapes );
-         /* ctremel: avoid segfaults with tape devices caused by pointer overlaps */ 
-           memcpy(tape_prev, tape_now, sizeof(perfstat_tape_t) * tapes );
+	memcpy(tape_prev, tape_now, sizeof(perfstat_tape_t) * tapes );
 }
 
 
@@ -2578,6 +2669,7 @@ perfstat_pagingspace_t *paging;
 void ps_paging_init()
 {
     	FUNCTION_START;
+	if(danger) return;
         /* check how many perfstat_pagingspace_t structures are available */
 	DEBUG printf("ps_paging_init()\n");
         pagingspaces = perfstat_pagingspace(NULL, NULL, sizeof(perfstat_pagingspace_t), 0);
@@ -2596,6 +2688,7 @@ void ps_paging()
         char    pagename[IDENTIFIER_LENGTH];
 
     	FUNCTION_START;
+	if(danger) return;
 	if(pagingspaces <= 0)
 		return;
 
@@ -2649,7 +2742,7 @@ void	filesystems()
 	setfsent();
 	for (i = 0; (fstab_buffer = getfsent() ) != NULL; i++) {
 		if (stat(fstab_buffer->fs_file, &stat_buffer) != -1 ) {
-			if (stat_buffer.st_flag & FS_MOUNT) {
+			if (stat_buffer.st_flag == FS_MOUNT) { /* changed to buzz out remote filesystem */
 				if ( (fd = open(fstab_buffer->fs_file, O_RDONLY)) != -1) {
 					if (fstatfs( fd, &statfs_buffer) != -1) {
 						if (!strncmp(fstab_buffer->fs_spec, "/proc", 5)) { /* /proc gives invalid/insane values */
@@ -2657,7 +2750,7 @@ void	filesystems()
 							fs_free = 0;
 							fs_size_used = 100.0;
 							fs_inodes_used = 100.0;
-						} else {
+                                                } else {
 							fs_size = (float)statfs_buffer.f_blocks * 4.0 / 1024.0;
 							fs_free = (float)statfs_buffer.f_bfree * 4.0 / 1024.0;
 							fs_size_used = ((float)statfs_buffer.f_blocks - (float)statfs_buffer.f_bfree)
@@ -2893,10 +2986,10 @@ void	identity()
 	uid = geteuid();
 	if (pw = getpwuid (uid)) {
 		pstring("username", pw->pw_name);
-		plong("userid", uid);
+		plong("userid", (long)uid);
 	} else {
 		pstring("username", "unknown");
-		plong("userid", -1);
+		plong("userid", (long)-1);
 	}
 	psectionend();
 }
@@ -2908,7 +3001,8 @@ void	hint(char *program)
 	printf("%s: help information. Version:%s\n\n", program,version);
 	printf("- Performance stats collector outputing JSON format. Default is stdout\n");
 	printf("- Core syntax:     %s -s seconds -c count\n", program);
-	printf("- JSON style:      -M  or -S or -O\n");
+/*	printf("- JSON style:      -M  or -S or -O\n"); 
+TO BE REMOVED */
 	printf("- File output:     -m directory -f\n");
 	printf("- Check & restart: -k\n");
 	printf("- Data options:    -P -L -V -v -u -U -? -d\n");
@@ -2918,19 +3012,22 @@ void	hint(char *program)
 	printf("\n");
 	printf("\t-s seconds : seconds between snapshots of data (default 60 seconds)\n");
 	printf("\t-c count   : number of snapshots then stop     (default forever)\n\n");
+/* TO BE REMOVED
 	printf("\t-S         : Older Single level output format   (section names form part of the value names)\n");
 	printf("\t-M         : Multiple level output format (section & subsection names (default))\n");
 	printf("\t-O         : Older Multiple level output format (like -M but identity before samples)\n\n");
+*/
 	printf("\t-m directory : Program will cd to the directory before output\n");
 	printf("\t-f         : Output to file (not stdout) to two files below\n");
-	printf("\t           : Data:   hostname_<year><month><day>_<hour><minutes>.json\n");
-	printf("\t           : Errors: hostname_<year><month><day>_<hour><minutes>.err\n\n");
+	printf("\t           :   Data:   hostname_<year><month><day>_<hour><minutes>.json\n");
+	printf("\t           :   Errors: hostname_<year><month><day>_<hour><minutes>.err\n\n");
 	printf("\t-k         : Read /tmp/njmon.pid for a running njmon PID & if found running then this copy exits\n\n");
 	printf("\t-P         : Also collect process stats         (these can be very large)\n");
 	printf("\t-t percent : Process CPU cut-off threshold percent.   Default 0.001%\n");
 	printf("\t-L         : Don't collect Logical Volume stats (takes extra CPU cycles)\n");
 	printf("\t-V         : Don't collect Volume Group   stats (takes extra CPU cycles)\n");
-	printf("\t           : -L & -V requires root access. If not root these are silently switched off\n");
+	printf("\t           :   -L & -V requires root access. If not root these are silently switched off\n");
+	printf("\t-C         : Shared CPU/Processor Pool, you need to enable performance data collection (HMC)\n");
 #ifdef VIOS
 	printf("\t-v         : VIOS data on virtual disks, virtual FC and virtual networks\n");
 #else
@@ -2961,7 +3058,7 @@ void	hint(char *program)
 	printf("\t/home/nag/njmon -s 300 -c 288 -f -m /home/perf\n");
 	printf("    2 Piping to data handler using defaults -s60 forever\n");
 	printf("\t/home/nag/njmon | myprog\n");
-	printf("    3 Add process stats and LV + VG data for an hout\n");
+	printf("    3 Add process stats and LV + VG data for an hour\n");
 	printf("\t./njmon -s60 -c 60 -PLV > njmon.json\n");
 	printf("    4 Collect daytime VIOS extra including SSP (if compiled in)\n");
 	printf("\t./njmon -s60 -c 720 -vuU > njmon_on_vios.json\n");
@@ -3019,6 +3116,7 @@ void	ps_disk_init()
 	char	disk_name[IDENTIFIER_LENGTH];
 
     	FUNCTION_START;
+	if(danger) return;
 	rc = perfstat_partial_reset(NULL, FLUSH_DISK | RESET_DISK_MINMAX);
 	ASSERT(rc == 0, "perfstat_partial_reset()", EXIT, rc);
 
@@ -3098,10 +3196,16 @@ void	ps_disk_stats(double elapsed)
 	char	diskname[IDENTIFIER_LENGTH];
 
     	FUNCTION_START;
+    	if(danger) return;
+    	if(disks == 0) return;
 	diskname[0] = 0;
 	rc = perfstat_disk((perfstat_id_t * )diskname, diskcurr, sizeof(perfstat_disk_t), disks);
 	/* printf("disks=%d, rc=%d\n", disks, rc); */
-	ASSERT(rc > 0, "perfstat_disk(data)", EXIT, rc);
+	ASSERT(rc > 0, "perfstat_disk(data)", RETURN, rc);
+	if(rc <= 0) {
+		disks = 0;
+		return;
+	}
 
 	psection("disks");
 	for (i = 0; i < disks; i++) {
@@ -3132,7 +3236,7 @@ void	ps_vios_target_init()
     	FUNCTION_START;
 	/* check how many perfstat_disk_t structures are available */
 	targets = perfstat_virtualdisktarget(NULL, NULL, sizeof(perfstat_disk_t), 0);
-	ASSERT(targets >= 0, "perfstat_disk(init)", EXIT, targets);
+	ASSERT(targets >= 0, "perfstat_disk(init)", RETURN, targets);
 
 	if(targets <= 0) {
 		vios_vhosts = 0;
@@ -3159,11 +3263,14 @@ void ps_vios_target_stats(double elapsed)
 	char	targetname[IDENTIFIER_LENGTH];
 
     	FUNCTION_START;
-	if(targets == 0)
-		return;
+	if(targets == 0) return;
 	targetname[0] = 0;
 	rc = perfstat_virtualdisktarget((perfstat_id_t * )targetname, targetcurr, sizeof(perfstat_disk_t), targets);
-	ASSERT(rc > 0, "perfstat_virtualtargetadapter(init)", EXIT, rc);
+	ASSERT(rc > 0, "perfstat_virtualtargetadapter(init)", RETURN, rc);
+	if(rc <= 0) {
+		targets = 0;
+		return;
+	}
 
 	psection("vios_disk_target");
 	for (i = 0; i < rc; i++) {
@@ -3246,8 +3353,8 @@ void ps_netbuffs_init()
 	
     /* allocate enough memory for all the structures */
     netbuffs_stat = calloc(netbuffs, sizeof(perfstat_netbuffer_t));
-    ASSERT_PTR(netbuffs_stat != NULL, "perfstat_netbuffer(init)", RETURN, netbuffs_stat);
-    if(netbuffs_stat==NULL){
+    ASSERT_PTR(netbuffs_stat != NULL, "perfstat_netbuffer(calloc)", RETURN, netbuffs_stat);
+    if(netbuffs_stat == NULL){
 	netbuffs = 0;
 	return;
     }
@@ -3273,11 +3380,11 @@ void ps_netbuffs()
     /* return code is number of structures returned */
     ret = perfstat_netbuffer(&first, netbuffs_stat, sizeof(perfstat_netbuffer_t), netbuffs);
     
-    ASSERT(ret > 0, "perfstat_netbuffer(init)", RETURN, ret);
+    ASSERT(ret > 0, "perfstat_netbuffer(data)", RETURN, ret);
     /* check for error */
     if (ret <= 0) {
 	  netbuffs = 0;
-	  exit(-1);
+	  return;
     }
     psection("netbuffers");
     for(i=0;i<ret;i++){
@@ -3611,8 +3718,7 @@ void make_pid_file()
 {
 int fd;
 int ret;
-//char buffer[32];
-char * buffer = calloc(32, sizeof(*buffer));
+char buffer[32];
 
     	FUNCTION_START;
     if((fd = creat(pid_filename, O_CREAT | O_WRONLY)) < 0) {
@@ -3630,8 +3736,7 @@ char * buffer = calloc(32, sizeof(*buffer));
 
 void check_pid_file()
 {
-//char buffer[32];
-char * buffer = calloc(32, sizeof(*buffer));
+char buffer[32];
 int fd;
 pid_t pid;
 int ret;
@@ -3681,8 +3786,7 @@ int	main(int argc, char **argv)
 	char	directory[4096+1];
 	int	file_output = 0;
 	char	filename[64];
-	//char	buffer[8192];
-        char * buffer = calloc(8196, sizeof(*buffer));
+	char	buffer[8192];
 	char	host[1024 +1] = { 0	};
 	char   *s;
 	int	hostmode = 0;
@@ -3705,7 +3809,7 @@ int	main(int argc, char **argv)
 	FILE   *fp;
 	int	print_child_pid = 0;
 	int	child_pid = 0;
-        int     rc; 
+	int	processor_pool = 0;
         
 	debug = atoi(getenv("NJMON_DEBUG"));
     	FUNCTION_START;
@@ -3716,10 +3820,10 @@ int	main(int argc, char **argv)
 
         signal(SIGUSR1, interrupt);
         signal(SIGUSR2, interrupt);
-        /* ignore SIGPIPE, yield EPIPE instead */
-        sigaction(SIGPIPE, &(struct sigaction){SIG_IGN}, NULL);
+         /* ignore SIGPIPE, yield EPIPE instead */
+        //sigaction(SIGPIPE, &(struct sigaction){SIG_IGN}, NULL); /* disabled because this eats whole memory and kills lpars */
 
-	while (-1 != (ch = getopt(argc, argv, "c:s:?hdDfm:SMOPrkLVvuUi:p:xX:t:"))) {
+	while (-1 != (ch = getopt(argc, argv, "c:s:?hdDfm:SMOPrkLVvuUi:p:xX:t:C"))) {
 		switch (ch) {
 		case 's': 
 			seconds = atoi(optarg);
@@ -3803,6 +3907,9 @@ int	main(int argc, char **argv)
 		case 't': 
 			cpu_threshold = atof(optarg);
 			break;
+		case 'C': 
+			processor_pool = 1;
+			break;
 		default:
 			printf("Unexpected command parameter \"%c\" = 0x%x\n - bailing out\n", (char)ch, ch);
 			exit(12);
@@ -3856,11 +3963,7 @@ int	main(int argc, char **argv)
 		    tim->tm_hour,
 		    tim->tm_min,
 		    tim->tm_sec);
-		rc = create_socket(host, port, hostname, buffer, secret);
-                if (rc < 0) {
-                    printf("create_socket: rc of initial connect is %d,giving up.\n",rc);
-                    exit(99);
-                }
+		//create_socket(host, port, hostname, buffer, secret);
 	}
 #endif /* NOREMOTE */
 	if(directory_set) {
@@ -3940,6 +4043,7 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
 	/* seed incrementing counters */
 	ps_cpu_init();
 	ps_cpu_total_init();
+	ps_part_total_init();
 	ps_memory_init();
 	ps_memory_page_init();
 	ps_paging_init();
@@ -4068,6 +4172,8 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
 		ps_part_config();
 		aix_server();
 		ps_part_total(); /* get hw ticks */
+		if(processor_pool)
+			ps_processor_pool(); /* must follow  ps_part_total() */
 		ps_cpu_stats(elapsed);
 		ps_cpu_total_stats(elapsed);
 		ps_memory(elapsed);
@@ -4111,11 +4217,17 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
 
 		DEBUG praw("Sample");
 		psampleend(loop == (maxloops -1));
-		rc = push();
-                if (rc < 0) {
-                printf("push1: rc is %d,trying reconnect.\n",rc);
-                create_socket(host, port, hostname, buffer, secret);
-                }
+
+                if (create_socket(host, port, hostname, buffer, secret) == -1) {
+                    perror("create_socket");
+                    exit(1);
+                 }
+ 
+                if (push_all(output) == -1) {
+                    perror("push_all");
+                    exit(1);
+                 }
+
 		/* debugging = uncomment to crash here!
 		ASSERT(loop == 42, "CRASHer", DUMP, loop); 
 		*/
@@ -4136,11 +4248,11 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
 		if(njmon_stats)pstats();
 		pfinish("");
 	}
-	rc = push();
-        if (rc < 0) {
-        printf("push2: rc is %d,trying reconnect.\n",rc);
-        create_socket(host, port, hostname, buffer, secret);
-        }
+        
+        if (push_all(output) == -1) {
+                    perror("push_all");
+                    exit(1);
+                 }
 	return 0;
 }
 /* - - - The End - - - */
