@@ -1,7 +1,7 @@
 # njmon
 
 The Code in this Repo is not compatible with the original njmon.
-The NG (New Generation) Directory contains a improved Version of njmon and related Tools.
+The NG (New Generation) Directory contains a improved Version of the AIX specific njmon and related Tools.
 
 ## Modifications
 
