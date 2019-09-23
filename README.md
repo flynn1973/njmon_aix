@@ -9,7 +9,7 @@ injector:
 - multithreaded server design
 - receive message size before actual data to avoid corrupted/incomplete transfers
 - better logging facility (slog)
-- close socket after transfer do avoid hundreds of open connections.
+- close socket after transfer to avoid hundreds of open connections.
 
 njmon:
 - send message size before data
