@@ -50,7 +50,7 @@ Explanation of ifdef and ifndef
 #define PROTOCOL_VERSION  "12NG"  
 
 /*njmon version */
-#define VERSION  "33@16/08/2019"
+#define VERSION  "33NG@16/10/2019"
 
 char	version[] = VERSION;
 static char	*SccsId = "njmonNG for AIX " VERSION;
@@ -228,6 +228,7 @@ static struct sockaddr_in serv_addr;
 
         DEBUG printf("create_socket: output buffer data send size is %d bytes\n",datalen);
         DEBUG printf("create_socket: actually sent %d bytes of data\n",n);
+        free(buffer);
 
 
         return n==-1?-1:0; // return -1 on failure, 0 on success
@@ -276,6 +277,14 @@ int oldmode = 0;
 int samples = 0;
 
 char *output;
+char *vhostcurr;
+char *vhostsave;
+char *targetprev;
+char *targetcurr;
+char *ssp_global;
+char *ssp_disk;
+char *ssp_lu;
+char *ssp_node;
 long output_size = 0;
 long output_char = 0;
 char *nullstring = "";
@@ -4026,7 +4035,7 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
                 setpgrp(); /* become process group leader */
                 signal(SIGHUP, SIG_IGN); /* ignore hangups */
         }
-	output_size = 1024 * 1024;
+	output_size = BUFSIZE;
 	output = malloc(output_size);
 	commlen = 1;  /* for the terminating zero */
 	for (i = 0; i < argc; i++){
@@ -4253,6 +4262,43 @@ ASSERT(2 == 1, "assert test", DUMP, (long long)debug);
                     perror("push_all");
                     exit(1);
                  }
+        // mr njmon only allocates without freeing something, so this crap kills paging space and brings down machines 
+        free(netbuffs_stat);
+        free(diskadapt);
+        free(disksaved);
+        free(vhostcurr);
+        free(vhostsave);
+        free(fc_stat);
+        free(fc_save);
+        free(vfc_curr);
+        free(vfc_save);
+        free(netbridge_statp);
+        free(netbridge_statq);
+        free(neta_statp);
+        free(neta_statq);
+        free(net_statp);
+        free(net_statq);
+        free(cpu_statp);
+        free(cpu_statq);
+        free(process_p);
+        free(process_c);
+        free(process_u);
+        free(tape_prev);
+        free(tape_now);
+        free(paging);
+        free(lv_stat);
+        free(lv_save);
+        free(vg_stat);
+        free(vg_save);
+        free(diskprev);
+        free(diskcurr);
+        free(targetprev);
+        free(targetcurr);
+        free(ssp_global);
+        free(ssp_disk);
+        free(ssp_lu);
+        free(ssp_node);
+        free(output);
 	return 0;
 }
 /* - - - The End - - - */
