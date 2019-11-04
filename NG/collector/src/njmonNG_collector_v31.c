@@ -446,7 +446,9 @@ int main(int argc, char **argv)
 						printf("duff json\n");
 				}
 			}
-			//if (fp) {fclose(fp); fp = NULL;}
+			
+			if (fp) {fclose(fp); fp = NULL;}
+			
 			/*printf("Config: port=%d, directory=%s, secret=%s, inject=%d, injector=%s, json=%d\n",
 				port, directory, local_secret, injector, injector_command, save_json); */
                         break;
@@ -582,29 +584,36 @@ int main(int argc, char **argv)
                          addr_size = sizeof serverStorage;
 			 
 			 // allocate socketfd on the heap to avoid nasty race conditions
-			 int * socketfd;
-			 socketfd = malloc(sizeof(int));
+			 int *socketfd = (int*)malloc(sizeof(int));
 
                          *socketfd = accept(listenfd, (struct sockaddr *) &serverStorage, &addr_size);
 
+			 // close socket when connection limit is reached, this is líttle bit dirty but should suffice for now
+			 // would be nice to send message to client, maybe will implement this later
+			 if( i >= MAX_CONNECTIONS)
+			 {
+				 slog_error(0,"Connection Limit reached! %d",socketfd);
+				 close((int) *socketfd);
+				 i--;
+			 }
+
+
                         //create a thread for each client request and assign the client request to it for processing 
                         //the main thread can now serve the next request
-			int err = pthread_create(&tid[i], NULL, socketThread, socketfd);
-                        if(err) {
-				slog_error(0,"Failed to create thread %d",err);
+			int err_create = pthread_create(&tid[i], NULL, socketThread, socketfd);
+                        if(err_create) {
+				slog_error(0,"Failed to create thread %d",err_create);
 			        exit(3);
 			}
 
-			if( i >= MAX_CONNECTIONS) 
-			{
-				i = 0;
-				while( i < MAX_CONNECTIONS )
-				{
-					pthread_join(tid[i++],NULL);
-				}
-			        i = 0;
+			int err_join = pthread_join(tid[i],NULL);
+			if(err_join) {
+				slog_error(0,"Failed to join thread %d",err_join);
+				exit(3);
 			}
+			free((void*)socketfd);
+
 	}
-pthread_exit(NULL);
+return 0;
 
 }
