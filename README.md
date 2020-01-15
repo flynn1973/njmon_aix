@@ -3,6 +3,7 @@
 The Code in this Repo is not compatible with the original njmon. I will try my best to cherrypick 
 important changes from upstream.
 The NG (New Generation) Directory contains a improved Version of the AIX specific njmon and related Tools.
+My Code/Modifications are distributed under the "I dont care at all" License, so take it and do whatever you like.
 
 ## Modifications
 
